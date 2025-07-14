@@ -1,5 +1,4 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
 import os
 import asyncio
@@ -7,148 +6,106 @@ from aiohttp import web
 
 intents = discord.Intents.default()
 intents.members = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Constants
+GUILD_ID = 1387102987238768783  # Replace with your actual server ID
 ROLE_STUDENT = 1392653369964757154
 LOG_CHANNEL_ID = 1392655742430871754
-GUILD_ID = 1387102987238768783
 INVITE_LINK = "https://discord.gg/66qx29Tf"
 
-# Track users who selected a role but haven't joined yet
 pending_roles = {}
 
-# Modal: Step 1 Registration
-class RegistrationModal(discord.ui.Modal, title="🌸 WMI Registration - Step 1"):
-    username = discord.ui.TextInput(
-        label="Your Full Name",
-        placeholder="e.g. Elira Q.",
-        required=True,
-        style=discord.TextStyle.short
-    )
-    email = discord.ui.TextInput(
-        label="Email Address (optional)",
-        placeholder="e.g. elira@example.com",
-        required=False,
-        style=discord.TextStyle.short
-    )
-    notes = discord.ui.TextInput(
-        label="Optional Notes",
-        placeholder="Anything you’d like to share with us?",
-        required=False,
-        style=discord.TextStyle.paragraph
-    )
+# Modal for WMI Registration
+class RegistrationModal(discord.ui.Modal, title="🌸 WMI Registration"):
+    name = discord.ui.TextInput(label="Full Name", placeholder="e.g. Elira Q.", required=True)
+    email = discord.ui.TextInput(label="Email (Optional)", placeholder="elira@example.com", required=False)
+    notes = discord.ui.TextInput(label="Optional Notes", placeholder="Anything else?", required=False, style=discord.TextStyle.paragraph)
 
     async def on_submit(self, interaction: discord.Interaction):
         embed = discord.Embed(
-            title="🌸 Wisteria Medical Institute Registration",
-            description="Please choose your role below to complete your registration.",
+            title="🌸 Registration Complete",
+            description="Please confirm your role below to finish your registration!",
             color=0xD8BFD8
         )
-        embed.add_field(name="Full Name", value=self.username.value, inline=True)
+        embed.add_field(name="Full Name", value=self.name.value, inline=True)
         embed.add_field(name="Discord", value=interaction.user.mention, inline=True)
-        embed.add_field(name="Date", value=discord.utils.format_dt(discord.utils.utcnow(), style='F'), inline=False)
         if self.email.value:
             embed.add_field(name="Email", value=self.email.value, inline=True)
         if self.notes.value:
             embed.add_field(name="Notes", value=self.notes.value, inline=False)
 
-        view = RoleSelectionView(
-            full_name=self.username.value,
-            email=self.email.value,
-            discord_user=interaction.user,
-            notes=self.notes.value
-        )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.send_message(embed=embed, view=RoleSelectionView(self.name.value, self.email.value, self.notes.value, interaction.user), ephemeral=True)
 
-# Role Selection View
+# View for selecting the student role
 class RoleSelectionView(discord.ui.View):
-    def __init__(self, full_name, email, discord_user, notes):
+    def __init__(self, name, email, notes, user):
         super().__init__(timeout=120)
-        self.full_name = full_name
+        self.name = name
         self.email = email
-        self.discord_user = discord_user
         self.notes = notes
+        self.user = user
 
     @discord.ui.button(label="🎓 MS1 - First Year Student", style=discord.ButtonStyle.primary)
-    async def student_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def assign_student(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pending_roles[self.user.id] = ROLE_STUDENT
         guild = interaction.guild
-        member = guild.get_member(self.discord_user.id)
+        member = guild.get_member(self.user.id)
 
-        pending_roles[self.discord_user.id] = ROLE_STUDENT
-        assigned_now = False
-
-        if member and member.guild.id == GUILD_ID:
-            role = member.guild.get_role(ROLE_STUDENT)
+        if member:
+            role = guild.get_role(ROLE_STUDENT)
             if role:
                 await member.add_roles(role)
-                assigned_now = True
-
-        msg = (
-            f"✅ You are now registered as **🎓 MS1 - First Year Student**.\n"
-            f"📨 Please [join our server]({INVITE_LINK}).\n"
-        )
-        msg += "🎉 Your role has been assigned!" if assigned_now else "🕓 Your role will be given once you join."
-
-        await interaction.response.send_message(msg, ephemeral=True)
+                await interaction.response.send_message("🎉 Role assigned! Welcome to MS1!", ephemeral=True)
+            else:
+                await interaction.response.send_message("⚠️ Role not found.", ephemeral=True)
+        else:
+            await interaction.response.send_message("📨 Please join the main server first: " + INVITE_LINK, ephemeral=True)
 
         log_channel = bot.get_channel(LOG_CHANNEL_ID)
         if log_channel:
-            log_embed = discord.Embed(
-                title="📝 New MS1 Registration",
-                color=discord.Color.purple(),
-                timestamp=discord.utils.utcnow()
-            )
-            log_embed.add_field(name="Full Name", value=self.full_name, inline=True)
-            log_embed.add_field(name="Discord", value=self.discord_user.mention, inline=True)
+            log = discord.Embed(title="📋 New Student Registered", color=discord.Color.purple())
+            log.add_field(name="Name", value=self.name, inline=True)
+            log.add_field(name="Discord", value=self.user.mention, inline=True)
             if self.email:
-                log_embed.add_field(name="Email", value=self.email, inline=True)
-            log_embed.add_field(name="Role", value="🎓 MS1 - First Year Student", inline=True)
+                log.add_field(name="Email", value=self.email, inline=True)
+            log.add_field(name="Role", value="MS1 - First Year Student", inline=True)
             if self.notes:
-                log_embed.add_field(name="Notes", value=self.notes, inline=False)
-            log_embed.set_footer(text="Wisteria Medical Institute AutoLogger")
-            await log_channel.send(embed=log_embed)
+                log.add_field(name="Notes", value=self.notes, inline=False)
+            await log_channel.send(embed=log)
 
-        self.stop()
-
-# Slash command registration
-@bot.tree.command(name="wmi_register", description="Start the WMI student registration process.")
+# Slash command to start registration
+@bot.tree.command(name="wmi_register", description="Register for Wisteria Medical Institute")
 async def wmi_register(interaction: discord.Interaction):
     await interaction.response.send_modal(RegistrationModal())
 
-# Assign pending roles when user joins the server
+# Assign role automatically when a user joins
 @bot.event
 async def on_member_join(member):
     if member.guild.id != GUILD_ID:
         return
-
     role_id = pending_roles.get(member.id)
-    if not role_id:
-        return
+    if role_id:
+        role = member.guild.get_role(role_id)
+        if role:
+            await member.add_roles(role)
+            channel = bot.get_channel(LOG_CHANNEL_ID)
+            if channel:
+                await channel.send(f"✅ {member.mention} was auto-assigned MS1 role.")
 
-    role = member.guild.get_role(role_id)
-    if role:
-        await member.add_roles(role)
-        log_channel = bot.get_channel(LOG_CHANNEL_ID)
-        if log_channel:
-            await log_channel.send(f"🎓 {member.mention} has joined and was auto-assigned the **MS1** role.")
-        del pending_roles[member.id]
-
-# Bot ready event
+# Sync and log in
 @bot.event
 async def on_ready():
-    print(f"🟣 Logged in as {bot.user} (ID: {bot.user.id})")
     try:
-        synced = await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
-        print(f"✅ Synced {len(synced)} command(s) to guild {GUILD_ID}")
+        await bot.tree.sync(guild=discord.Object(id=GUILD_ID))
+        print(f"✅ Synced commands to guild {GUILD_ID}")
     except Exception as e:
-        print(f"❌ Sync failed: {e}")
-    for g in bot.guilds:
-        print(f"📌 Connected to: {g.name} ({g.id})")
+        print("❌ Failed to sync commands:", e)
+    print(f"🟣 Logged in as {bot.user}")
 
-# Health check endpoint for Render or SeeNode
+# Health check for Seenode
 async def handle(request):
-    return web.Response(text="WMI Bot is running!")
+    return web.Response(text="🌸 WMI Bot is running!")
 
 async def start_webserver():
     app = web.Application()
@@ -160,14 +117,10 @@ async def start_webserver():
     await site.start()
     print(f"🌐 Web server running on port {port}")
 
-# Run everything
 async def main():
     await bot.login(os.getenv("DISCORD_TOKEN"))
     await start_webserver()
     await bot.connect()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("🔻 Bot stopped.")
+    asyncio.run(main())
